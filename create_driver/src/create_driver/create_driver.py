@@ -209,13 +209,19 @@ class SerialCommandInterface(object):
 
   """
   def __init__(self, tty, baudrate):
-    self.ser = serial.Serial(tty, baudrate=baudrate, timeout=SERIAL_TIMEOUT)
-    self.wake()
-    self.opcodes = {}
+    try:
+       self.ser = serial.Serial(tty, baudrate=baudrate, timeout=SERIAL_TIMEOUT)
+       logging.info("connected to serial port: %s"%(tty))
+       self.wake()
+       self.opcodes = {}
 
-    #TODO: kwc all locking code should be outside of the driver. Instead,
-    #could place a lock object in Roomba and let people "with" it
-    self.lock = threading.RLock()
+       #TODO: kwc all locking code should be outside of the driver. Instead,
+       #could place a lock object in Roomba and let people "with" it
+       self.lock = threading.RLock()
+       logging.info("locked serial port: %s"%(tty))
+    except:
+       logging.warn("connection to serial port: %s failed"%(tty))
+
 
   def wake(self):
     """wake up robot."""
@@ -235,16 +241,21 @@ class SerialCommandInterface(object):
 
   def send(self, bytes):
     """send a string of bytes to the robot."""
+    logging.info("sending: {}".format(bytes))
+    # logging.info(''.join(traceback.format_stack()))
     with self.lock:
-      self.ser.write(struct.pack('B' * len(bytes), *bytes))
+      amt = self.ser.write(struct.pack('B' * len(bytes), *bytes))
+      logging.info("sent: {}".format(amt))
 
   #TODO: kwc the locking should be done at a higher level
   def read(self, num_bytes):
     """Read a string of 'num_bytes' bytes from the robot."""
-    logging.debug('Attempting to read %d bytes from SCI port.' % num_bytes)
+    logging.info('Attempting to read %d bytes from SCI port.' % num_bytes)
     with self.lock:
       data = self.ser.read(num_bytes)
-    logging.debug('Read %d bytes from SCI port.' % len(data))
+      logging.warn('Read %d bytes from SCI port.' % len(data))
+      # logging.warn(''.join(traceback.format_stack()))
+
     if not data:
       raise DriverError('Error reading from SCI port. No data.')
     if len(data) != num_bytes:
@@ -253,7 +264,7 @@ class SerialCommandInterface(object):
 
   def flush_input(self):
     """Flush input buffer, discarding all its contents."""
-    logging.debug('Flushing serial input buffer.')
+    logging.info('Flushing serial input buffer.')
     self.ser.flushInput()
 
   def __getattr__(self, name):
@@ -266,7 +277,7 @@ class SerialCommandInterface(object):
     #TODO: kwc do static initialization instead
     if name in self.opcodes:
       def send_opcode(*bytes):
-        logging.debug('sending opcode %s.' % name)
+        logging.info('sending opcode {}.'.format(name))
         self.send([self.opcodes[name]] + list(bytes))
       return send_opcode
     raise AttributeError
@@ -284,6 +295,7 @@ class Roomba(object):
   def start(self, tty='/dev/ttyUSB0', baudrate=57600):
     self.tty = tty
     self.sci = SerialCommandInterface(tty, baudrate)
+    logging.info("sci started")
     self.sci.add_opcodes(ROOMBA_OPCODES)
   
   def change_baud_rate(self, baud_rate):
@@ -321,9 +333,10 @@ class Roomba(object):
 
   def direct_drive(self, velocity_left, velocity_right):
     # Mask integers to 2 bytes.
+    logging.info('direct drive')
     vl = int(velocity_left) & 0xffff
     vr = int(velocity_right) & 0xffff
-    self.sci.direct_drive(*struct.unpack('4B', struct.pack('>2H', vr, vl)))
+    self.sci.send(*struct.unpack('4B', struct.pack('>2H', vr, vl)))
     
   def drive(self, velocity, radius):
     """controls Roomba's drive wheels.
@@ -356,7 +369,7 @@ class Roomba(object):
     # TODO(damonkohler): The 4 unpacked bytes will just be repacked later,
     # that seems dumb to me.
     bytes = struct.unpack('4B', struct.pack('>2H', velocity, radius))
-    self.sci.drive(*bytes)
+    self.sci.send(*bytes)
 
   def stop(self):
     """Set velocity and radius to 0 to stop movement."""
